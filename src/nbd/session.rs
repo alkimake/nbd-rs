@@ -417,13 +417,21 @@ impl NBDSession {
                 self.handle_opt_set_meta_context();
             }
             _ => {
+                self.consume_option_payload();
                 log::warn!("Invalid/Unimplemented OPT: {:?}", option);
-                self.reply_opt(
-                    option,
-                    proto::NBD_REP_ERR_UNSUP,
-                    0,
-                );
+                self.reply(option, proto::NBD_REP_ERR_UNSUP, 0);
             }
+        }
+    }
+
+    fn consume_option_payload(&self) {
+        let socket = Rc::clone(&self.socket);
+        let len = util::read_u32(&socket.borrow());
+        if len > 0 {
+            let mut data = vec![0; len as usize];
+            socket.borrow_mut()
+                .read_exact(&mut data)
+                .expect("Error on reading unimplemented option payload");
         }
     }
 
@@ -502,15 +510,8 @@ impl NBDSession {
     }
 
     fn handle_opt_abort(&self) {
-        /*
-        let len = util::read_u32(clone_stream!(socket));
-        self.reply_opt(
-            clone_stream!(socket),
-            proto::NBD_OPT_ABORT,
-            proto::NBD_REP_ERR_UNSUP,
-            len,
-        );
-        */
+        self.consume_option_payload();
+        self.reply(proto::NBD_OPT_ABORT, proto::NBD_REP_ACK, 0);
     }
 
     fn handle_opt_info_go(&self, opt: u32) {
@@ -681,5 +682,3 @@ impl NBDSession {
     }
 }
 
-//TODO
-//impl Default for NBDSession {}
