@@ -62,8 +62,6 @@ impl FileBackend {
     }
 
     fn get_file(&self, object_name: String) -> Result<Arc<RwLock<MappedFile>>, Error> {
-        // TODO: Check if self.openFiles already has the file, return that
-        //let file = self.open_file(object_name, false);
         let mut open_files = self.open_files.write().unwrap();
         let mapped_file = open_files.get_key_value(&object_name);
         if mapped_file.is_some() {
@@ -216,6 +214,7 @@ impl SimpleObjectStorage for FileBackend {
     }
 
     fn delete(&self, object_name: String) -> Result<Propagation, Error> {
+        self.open_files.write().unwrap().remove(&object_name);
         remove_file(self.obj_path(object_name))?;
         Ok(Propagation::Guaranteed)
     }
@@ -223,11 +222,9 @@ impl SimpleObjectStorage for FileBackend {
     fn get_size(&self, object_name: String) -> Result<u64, Error> {
         let path = self.obj_path(object_name.clone());
         log::debug!("Getting size of {:?}", path);
-
-        let length_data = path
-            .metadata()
-            .expect(&format!("Error on getting size of: <{}>", object_name.clone()));
-
+        let length_data = path.metadata().map_err(|e| {
+            Error::new(e.kind(), format!("Error on getting size of: <{}>: {}", object_name, e))
+        })?;
         Ok(length_data.len())
     }
     
@@ -252,28 +249,13 @@ impl SimpleObjectStorage for FileBackend {
     }
 
     fn start_operations_on_object(&self, object_name: String) -> Result<(), Error> {
-        self.get_file(object_name);
-        //let mut open_files = self.open_files.write().unwrap();
-        // TODO: Check if self.openFiles already has same file, use Rc.increment_strong_count in that case
-        // TODO: Mmap? MappedFile::new(f).expect("Something went wrong");
-        // TODO: Exact same behavior with `get_file`?
-        /*open_files.insert(
-            object_name.clone(),
-            Arc::new(RwLock::new(MappedFile::open(object_name.clone()).unwrap()))
-        );*/
+        self.get_file(object_name)?;
         Ok(())
     }
 
     fn end_operations_on_object(&self, object_name: String) -> Result<(), Error> {
-        // TODO: code below is stupid here. just remove file from this.openFiles
-        let file = self.get_file(object_name.clone()).unwrap(); // get or open file
-        if !(Arc::strong_count(&file) >= 1) {
-            // https://doc.rust-lang.org/std/rc/struct.Rc.html#safety-3
-            return Err(Error::new(ErrorKind::Other, "Unsafe ending operations on object. There is no operations."))
-        }
-        unsafe{ Arc::decrement_strong_count(Arc::into_raw(file)); }
+        self.open_files.write().unwrap().remove(&object_name);
         Ok(())
-        //Ok(drop(file)) // !?
     }
 
     fn persist_object(&self, object_name: String) -> Result<Propagation, Error> {
@@ -464,7 +446,19 @@ mod tests {
             ..FileBackend::default()
         };
 
-        filesystem.start_operations_on_object(dummy_file_name.clone());
-        filesystem.end_operations_on_object(dummy_file_name.clone());
+        filesystem.start_operations_on_object(dummy_file_name.clone()).unwrap();
+        assert_eq!(filesystem.open_files.read().unwrap().len(), 1);
+        filesystem.end_operations_on_object(dummy_file_name.clone()).unwrap();
+        assert_eq!(filesystem.open_files.read().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_file_backend_get_size_missing() {
+        let folder = TempFolder::new();
+        let filesystem = FileBackend {
+            folder_path: folder.path.clone(),
+            ..FileBackend::default()
+        };
+        assert!(filesystem.get_size(String::from("missing.bin")).is_err());
     }
 }
