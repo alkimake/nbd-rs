@@ -36,11 +36,6 @@ pub struct NBDExport {
 
 impl NBDExport {
     pub fn new(name: String, driver_type: String, conn_str: String) -> NBDExport {
-        // TODO: unhardcode below from here (it is okay to hardcode in block/mod.rs though)
-        if !["raw", "sharded", "distributed"].contains(&driver_type.as_str()) {
-            panic!("Driver must be one of the values `raw` or `sharded`. Found '{}'", driver_type);
-        }
-
         let config = BlockStorageConfig {
             export_name: Some(name.clone()),
             export_size: None,
@@ -50,7 +45,8 @@ impl NBDExport {
             init_volume: false,
         };
 
-        let driver = block_storage_with_config(config).unwrap();
+        let driver = block_storage_with_config(config)
+            .unwrap_or_else(|e| panic!("Invalid storage driver '{}': {}", driver_type, e));
         let size = driver.get_volume_size() as usize;
 
         log::info!("export {:?} -> {}({:?})", &name, &driver_type, &conn_str);
@@ -103,10 +99,8 @@ impl NBDServer {
         log::info!("Done");
     }
 
-    fn handle_connection(&mut self, socket: Rc<RefCell<TcpStream>> /*, addr: SocketAddr*/) -> NBDSession {
-        // TODO: Process socket
+    fn handle_connection(&mut self, socket: Rc<RefCell<TcpStream>>) -> NBDSession {
         let flags = self.handshake(Rc::clone(&socket));
-        // TODO: implement Default for NBDSession
         let session = NBDSession::new(
             Rc::clone(&socket),
             flags,
