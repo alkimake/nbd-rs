@@ -279,28 +279,24 @@ impl NBDSession {
                 log::trace!("\t-->flags:{}, handle: {}, offset: {}, datalen: {}", flags, handle, offset, datalen);
                 if datalen == 0 {
                     log::warn!("Flush length is zero. Ignoring flush");
+                    self.reply_cmd_ok(handle);
                 } else {
                     let selected_export = self.selected_export.borrow_mut();
                     let mut write_lock = selected_export.as_ref().unwrap().try_write().unwrap();
                     {
                         let mut driver = Arc::get_mut(&mut write_lock.driver).unwrap().try_write().unwrap();
-                        let driver_name = driver.get_name();
                         let volume_size = driver.get_volume_size() as usize;
                         match driver.flush(0, volume_size) {
-                            Ok(_) => log::trace!("flushed"),
-                            Err(e) => log::error!("{}", e) // TODO: Reflect error to client
+                            Ok(_) => {
+                                log::trace!("flushed");
+                                self.reply_cmd_ok(handle);
+                            }
+                            Err(e) => {
+                                log::error!("{}", e);
+                                self.reply_cmd_err(handle, &e.to_string());
+                            }
                         }
                     }
-                }
-                if self.structured_reply.get() == true {
-                    self.structured_reply(
-                        proto::NBD_REPLY_FLAG_DONE,
-                        proto::NBD_REPLY_TYPE_NONE,
-                        handle,
-                        0
-                    );
-                } else {
-                    self.simple_reply(0_u32, handle);
                 }
             }
             proto::NBD_CMD_TRIM => { // 4
@@ -309,23 +305,17 @@ impl NBDSession {
                 let mut write_lock = selected_export.as_ref().unwrap().try_write().unwrap();
                 {
                     let mut driver = Arc::get_mut(&mut write_lock.driver).unwrap().try_write().unwrap();
-                    let driver_name = driver.get_name();
-                    let volume_size = driver.get_volume_size() as usize;
                     log::trace!("offset: {}, length: {}", offset, datalen);
                     match driver.trim(offset, datalen as usize) {
-                        Ok(_) => log::trace!("trimmed"),
-                        Err(e) => log::error!("{}", e) // TODO: Reflect error to client
+                        Ok(_) => {
+                            log::trace!("trimmed");
+                            self.reply_cmd_ok(handle);
+                        }
+                        Err(e) => {
+                            log::error!("{}", e);
+                            self.reply_cmd_err(handle, &e.to_string());
+                        }
                     }
-                }
-                if self.structured_reply.get() == true {
-                    self.structured_reply(
-                        proto::NBD_REPLY_FLAG_DONE,
-                        proto::NBD_REPLY_TYPE_NONE,
-                        handle,
-                        0
-                    );
-                } else {
-                    self.simple_reply(0_u32, handle);
                 }
             }
             proto::NBD_CMD_BLOCK_STATUS => { // 7
@@ -432,6 +422,38 @@ impl NBDSession {
             socket.borrow_mut()
                 .read_exact(&mut data)
                 .expect("Error on reading unimplemented option payload");
+        }
+    }
+
+    fn reply_cmd_ok(&self, handle: u64) {
+        if self.structured_reply.get() {
+            self.structured_reply(
+                proto::NBD_REPLY_FLAG_DONE,
+                proto::NBD_REPLY_TYPE_NONE,
+                handle,
+                0
+            );
+        } else {
+            self.simple_reply(0_u32, handle);
+        }
+    }
+
+    fn reply_cmd_err(&self, handle: u64, err: &str) {
+        let err_msg = err.as_bytes();
+        if self.structured_reply.get() {
+            self.structured_reply(
+                proto::NBD_REPLY_FLAG_DONE,
+                proto::NBD_REPLY_TYPE_ERROR,
+                handle,
+                6 + err_msg.len() as u32
+            );
+            let socket = Rc::clone(&self.socket);
+            let mut m_socket = socket.borrow_mut();
+            util::write_u32(proto::NBD_REP_ERR_UNKNOWN, &mut m_socket);
+            util::write_u16(err_msg.len() as u16, &mut m_socket);
+            write!(err_msg, &mut m_socket);
+        } else {
+            self.simple_reply(proto::NBD_REP_ERR_UNKNOWN, handle);
         }
     }
 
@@ -681,4 +703,3 @@ impl NBDSession {
         }
     }
 }
-
