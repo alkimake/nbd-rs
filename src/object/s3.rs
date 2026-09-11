@@ -214,7 +214,10 @@ impl S3Backend {
         S3Backend {
             url: url.clone(),
             client: S3Client::new(S3Config {
-                region: "minio".to_string(), // TODO: Derive from URL
+                region: parsed_url.query_pairs()
+                    .find(|(k, _)| k == "region")
+                    .map(|(_, v)| v.into_owned())
+                    .unwrap_or_else(|| "minio".to_string()),
                 endpoint: format!("{}://{}:{}",
                     parsed_url.scheme(),
                     parsed_url.host_str().unwrap(),
@@ -222,7 +225,10 @@ impl S3Backend {
                     ).to_string(),
                 access_key: parsed_url.username().clone().to_string(),
                 secret_key: password.clone().to_string(),
-                path_style: true, // TODO: Derive from URL
+                path_style: parsed_url.query_pairs()
+                    .find(|(k, _)| k == "path_style")
+                    .map(|(_, v)| v != "false")
+                    .unwrap_or(true),
             }),
             bucket,
             prefix,
