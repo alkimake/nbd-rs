@@ -75,15 +75,17 @@ impl DistributedBlock {
 
     pub fn size_of_volume(&self) -> u64 {
         let object_name = String::from("size");
-        let filedata = self.object_storages[0].read(object_name); // TODO: Errors?
-        if filedata.is_err() {
-            return 4 * 1024 * 1024 * 1024; // 4 GiB
+        match self.object_storages[0].read(object_name) {
+            Ok(filedata) => {
+                let mut string = str::from_utf8(&filedata).unwrap().to_string();
+                string.retain(|c| !c.is_whitespace());
+                string.parse().unwrap()
+            }
+            Err(e) => {
+                log::warn!("size object missing or unreadable ({}), defaulting to 4 GiB", e);
+                4 * 1024 * 1024 * 1024
+            }
         }
-        // TODO: Allow file to not exist, create if does not exist
-        let mut string = str::from_utf8(&filedata.unwrap()).unwrap().to_string();
-        string.retain(|c| !c.is_whitespace());
-        let volume_size: u64 = string.parse().unwrap();
-        volume_size
     }
 
     pub fn shard_name(&self, shard_idx: usize, replica_idx: u8) -> String {
@@ -251,11 +253,7 @@ impl BlockStorage for DistributedBlock {
     }
 
     fn write(&mut self, offset: u64, length: usize, data: &[u8]) -> Result<Propagation, Error> {
-        // FIXME! 
-        // This is so wrong.
-        // We are trying to write same data more than once but write function returns propagation which depends only
-        // 1 node so for temporary, propagation of the first node is returned.
-        let mut overall_first_propagation = Propagation::Noop;
+        let mut worst_propagation = Propagation::Guaranteed;
         for replica_idx in 0..self.shard_distribution.replicas {
             log::trace!("storage::write(offset: {}, length: {})", offset, length);
             let mut overall_propagation : Propagation = Propagation::Guaranteed;
@@ -315,19 +313,15 @@ impl BlockStorage for DistributedBlock {
                 }
             }
  
-            if replica_idx == 0 {
-                overall_first_propagation = overall_propagation;
+            if (overall_propagation as u8) < (worst_propagation as u8) {
+                worst_propagation = overall_propagation;
             }
         }
-        Ok(overall_first_propagation)
+        Ok(worst_propagation)
     }
 
     fn flush(&mut self, offset: u64, length: usize) -> Result<Propagation, Error> {
-        // FIXME! 
-        // This is so wrong.
-        // We are trying to flush same data more than once but flush function returns propagation which depends only
-        // 1 node so for temporary, propagation of the first node is returned.
-        let mut overall_first_propagation = Propagation::Noop;
+        let mut worst_propagation = Propagation::Guaranteed;
         for replica_idx in 0..self.shard_distribution.replicas {
             let start = self.shard_index(offset);
             let end = if 0 == (offset + length as u64) % self.shard_size {
@@ -350,11 +344,11 @@ impl BlockStorage for DistributedBlock {
                     overall_propagation = propagated;
                 }
             }
-            if replica_idx == 0 {
-                overall_first_propagation = overall_propagation;
+            if (overall_propagation as u8) < (worst_propagation as u8) {
+                worst_propagation = overall_propagation;
             }
         }
-        Ok(overall_first_propagation)
+        Ok(worst_propagation)
     }
 
     fn trim(&mut self, offset: u64, length: usize) -> Result<Propagation, Error> {

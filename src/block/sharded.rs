@@ -46,15 +46,17 @@ impl ShardedBlock {
 
     pub fn size_of_volume(&self) -> u64 {
         let object_name = String::from("size");
-        let filedata = self.object_storage.read(object_name); // TODO: Errors?
-        if filedata.is_err() {
-            return 4 * 1024 * 1024 * 1024; // 4 GiB
+        match self.object_storage.read(object_name) {
+            Ok(filedata) => {
+                let mut string = str::from_utf8(&filedata).unwrap().to_string();
+                string.retain(|c| !c.is_whitespace());
+                string.parse().unwrap()
+            }
+            Err(e) => {
+                log::warn!("size object missing or unreadable ({}), defaulting to 4 GiB", e);
+                4 * 1024 * 1024 * 1024
+            }
         }
-        // TODO: Allow file to not exist, create if does not exist
-        let mut string = str::from_utf8(&filedata.unwrap()).unwrap().to_string();
-        string.retain(|c| !c.is_whitespace());
-        let volume_size: u64 = string.parse().unwrap();
-        volume_size
     }
 
     pub fn shard_name(&self, index: usize) -> String {
